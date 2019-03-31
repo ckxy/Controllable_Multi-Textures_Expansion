@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+python -W ignore train.py --dataroot ./datasets/half/mix10 --name multi_mix_14_2 --no_lsgan --no_flip --padding_type replicate --model multi_half --which_model_netG resnet_2x_6blocks --which_model_netD n_layers --n_layers_D 4 --lambda_l1 100 --lambda_style 5 --dataset_mode 2n --norm batch --resize_or_crop no --niter_decay 50000 --niter 50000 --save_epoch_freq 2000 --gpu_ids 1 --n_save_image 4 --display_freq 500 --fineSize 256 --batchSize 10 --use_visdom

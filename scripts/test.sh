@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+python test.py --dataroot ./datasets/half/mix10 --name multi_mix_12_5 --model test --which_epoch 98000 --resize_or_crop none --fineSize 256 --gpu_ids 0 --test_mode h_test --times 3 --which_content test/23.jpg --which_style 5.png
