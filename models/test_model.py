@@ -1,11 +1,10 @@
-from torch.autograd import Variable
 from collections import OrderedDict
 import util.util as util
 from .base_model import BaseModel
 from . import networks
-import random
 from util.opt_reader import opt_reader
 import os
+import torch
 
 
 class TestModel(BaseModel):
@@ -20,26 +19,33 @@ class TestModel(BaseModel):
         if opt.test_mode == 'v_train':
             opt.dataset_mode = 'sn2t'
             opt.phase = 'test_trainset'
+            opt.which_style = ''
+            opt.which_content = ''
         elif opt.test_mode == 'v_test':
             opt.dataset_mode = 'snt'
             opt.phase = 'test_testset'
+            opt.which_style = ''
+            opt.which_content = ''
         elif opt.test_mode == 'v_st':
             assert opt.times > 0
             opt.dataset_mode = 'n2t'
             opt.phase = 'stress_test_' + str(opt.fineSize)
+            opt.which_style = ''
+            opt.which_content = ''
         elif opt.test_mode == 'h_test':
             assert opt.which_content != ''
             assert opt.which_style != ''
             opt.dataset_mode = 'single'
             opt.phase = 'test_testset'
+            opt.which_epoch = ''
         else:
             raise ValueError("Test Mode [%s] not recognized." % opt.test_mode)
 
         opt_dir = os.path.join(opt.checkpoints_dir, opt.name)
         opt_dir = os.path.join(opt_dir, 'opt.txt')
-        para_name = ['input_nc', 'n_pic', 'ngf', 'niter', 'niter_decay', 'no_dropout', 'norm', 'output_nc',
+        para_name = ['input_nc', 'n_pic', 'ngf', 'niter', 'niter_decay', 'no_dropout', 'norm', 'nrb', 'output_nc',
                      'padding_type', 'save_epoch_freq', 'which_model_netG']
-        para_type = ['int', 'int', 'int', 'int', 'int', 'bool', 'str', 'int', 'str', 'int', 'str']
+        para_type = ['int', 'int', 'int', 'int', 'int', 'bool', 'str', 'int', 'int', 'str', 'int', 'str']
         train_opt = opt_reader(opt_dir, para_name, para_type)
 
         opt.nThreads = 1  # test code only supports nThreads = 1
@@ -55,13 +61,11 @@ class TestModel(BaseModel):
         niter_decay = train_opt['niter_decay']
         opt.no_dropout = train_opt['no_dropout']
         opt.norm = train_opt['norm']
+        opt.nrb = train_opt['nrb']
         opt.output_nc = train_opt['output_nc']
         opt.padding_type = train_opt['padding_type']
         save_epoch_freq = train_opt['save_epoch_freq']
         opt.which_model_netG = train_opt['which_model_netG']
-
-        self.input_A = self.Tensor(opt.batchSize, opt.input_nc, opt.fineSize, opt.fineSize)
-        self.input_B = self.Tensor(opt.batchSize, opt.input_nc, opt.fineSize, opt.fineSize)
 
         self.netG = networks.define_G(opt)
         self.netG.eval()
@@ -69,9 +73,9 @@ class TestModel(BaseModel):
         self.results = OrderedDict([])
         self.h_count = ''
 
-        print('---------- Networks initialized -------------')
-        networks.print_network(self.netG)
-        print('-----------------------------------------------')
+        # print('---------- Networks initialized -------------')
+        # networks.print_network(self.netG)
+        # print('-----------------------------------------------')
 
         if opt.test_mode == 'h_test':
             self.epochs = [str(i) for i in range(save_epoch_freq, niter + niter_decay + 1, save_epoch_freq)]
@@ -93,17 +97,14 @@ class TestModel(BaseModel):
 
     def set_input(self, input):
         # we need to use single_dataset mode
-        input_A = input['A']
-        self.input_A.resize_(input_A.size()).copy_(input_A)
-        input_B = input['B']
-        self.input_B.resize_(input_B.size()).copy_(input_B)
+        self.real_A = input['A'].to(self.device)
+        self.real_B = input['B'].to(self.device)
         self.image_paths = input['A_path']
 
     def load_which_epoch(self, epoch):
         self.load_network(self.netG, 'G', epoch)
 
     def test(self):
-        self.real_A = Variable(self.input_A, volatile=True)
         if self.opt.test_mode == 'v_train':
             print('process image... %s' % self.image_paths)
             self.results.clear()
@@ -124,8 +125,8 @@ class TestModel(BaseModel):
                 self.single_test()
 
     def single_test(self):
-        self.real_B = Variable(self.input_B, volatile=True)
-        self.fake_B = self.netG.forward(self.real_B, self.real_A)
+        with torch.no_grad():
+            self.fake_B = self.netG(self.real_B, self.real_A)
 
         real_A = util.tensor2im(self.real_A.data)
         fake_B = util.tensor2im(self.fake_B.data)
@@ -148,19 +149,19 @@ class TestModel(BaseModel):
 
     def stress_test_up(self, step=3):
         results = []
-        self.real_A = Variable(self.input_A, volatile=True)
-        self.real_B = Variable(self.input_B, volatile=True)
-        self.fake_B = self.netG.forward(self.real_B, self.real_A)
+        with torch.no_grad():
+            self.fake_B = self.netG(self.real_B, self.real_A)
 
         real_A = util.tensor2im(self.real_A.data)
         fake_B = util.tensor2im(self.fake_B.data)
         results.append(('real_{}_A'.format(0), real_A))
         results.append(('fake_{}_B'.format(0), fake_B))
         for i in range(1, step):
-            self.real_A = Variable(self.fake_B.data, volatile=True)
+            self.real_A = self.fake_B
             print(self.real_A.size())
             self.real_B = self.real_B.repeat(1, 1, 2, 2)
-            self.fake_B = self.netG.forward(self.real_B, self.real_A)
+            with torch.no_grad():
+                self.fake_B = self.netG(self.real_B, self.real_A)
             fake_B = util.tensor2im(self.fake_B.data)
             results.append(('fake_{}_B'.format(i), fake_B))
 

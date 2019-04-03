@@ -18,7 +18,7 @@ except NameError:
 def tensor2im(image_tensor, imtype=np.uint8):
     image_numpys = []
     for i in xrange(image_tensor.shape[0]):
-        image_numpy = image_tensor[i].cpu().float().numpy()
+        image_numpy = image_tensor[i].cpu().detach().numpy()
         image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
         image_numpy.astype(imtype)
         image_numpys.append(image_numpy)

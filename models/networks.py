@@ -1,11 +1,7 @@
 import torch
 import torch.nn as nn
-from torch.nn import init
 import functools
-from torch.autograd import Variable
-import torch.nn.functional as F
-import numpy as np
-from .block import ResnetBlock, Inspiration, GramMatrix, adaptive_instance_normalization
+from .block import ResnetBlock, Inspiration, GramMatrix
 
 
 ###############################################################################
@@ -43,13 +39,14 @@ def define_G(opt):
     if use_gpu:
         assert (torch.cuda.is_available())
 
-    if which_model_netG == 'resnet_2x_6blocks':
+    if which_model_netG == 'resnet_2x' or which_model_netG == 'resnet_2x_6blocks':
         netG = MultiResnet2XGenerator(opt)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % which_model_netG)
 
     if use_gpu:
-        netG.cuda(gpu_ids[0])
+        netG.to(gpu_ids[0])
+        netG = nn.DataParallel(netG, gpu_ids)
     netG.apply(weights_init)
     return netG
 
@@ -68,10 +65,13 @@ def define_D(opt):
     else:
         raise NotImplementedError('Discriminator model name [%s] is not recognized' %
                                   which_model_netD)
-    if use_gpu:
-        netD.cuda(gpu_ids[0])
+
+    if len(gpu_ids) > 0:
+        netD.to(gpu_ids[0])
+        netD = nn.DataParallel(netD, gpu_ids)
     netD.apply(weights_init)
     return netD
+
 
 def print_network(net):
     num_params = 0
@@ -91,36 +91,21 @@ def print_network(net):
 # but it abstracts away the need to create the target label tensor
 # that has the same size as the input
 class GANLoss(nn.Module):
-    def __init__(self, use_lsgan=True, target_real_label=1.0, target_fake_label=0.0,
-                 tensor=torch.FloatTensor):
+    def __init__(self, use_lsgan=True, target_real_label=1.0, target_fake_label=0.0):
         super(GANLoss, self).__init__()
-        self.real_label = target_real_label
-        self.fake_label = target_fake_label
-        self.real_label_var = None
-        self.fake_label_var = None
-        self.Tensor = tensor
+        self.register_buffer('real_label', torch.tensor(target_real_label))
+        self.register_buffer('fake_label', torch.tensor(target_fake_label))
         if use_lsgan:
             self.loss = nn.MSELoss()
         else:
             self.loss = nn.BCELoss()
 
     def get_target_tensor(self, input, target_is_real):
-        target_tensor = None
         if target_is_real:
-            create_label = ((self.real_label_var is None) or
-                            (self.real_label_var.numel() != input.numel()))
-            if create_label:
-                real_tensor = self.Tensor(input.size()).fill_(self.real_label)
-                self.real_label_var = Variable(real_tensor, requires_grad=False)
-            target_tensor = self.real_label_var
+            target_tensor = self.real_label
         else:
-            create_label = ((self.fake_label_var is None) or
-                            (self.fake_label_var.numel() != input.numel()))
-            if create_label:
-                fake_tensor = self.Tensor(input.size()).fill_(self.fake_label)
-                self.fake_label_var = Variable(fake_tensor, requires_grad=False)
-            target_tensor = self.fake_label_var
-        return target_tensor
+            target_tensor = self.fake_label
+        return target_tensor.expand_as(input)
 
     def __call__(self, input, target_is_real):
         target_tensor = self.get_target_tensor(input, target_is_real)
@@ -134,15 +119,13 @@ class MultiResnet2XGenerator(nn.Module):
         ngf = opt.ngf
         norm_layer = get_norm_layer(norm_type=opt.norm)
         use_dropout = not opt.no_dropout
-        gpu_ids = opt.gpu_ids
         padding_type = opt.padding_type
+        n_blocks = opt.nrb
 
-        n_blocks = 6
         super(MultiResnet2XGenerator, self).__init__()
         self.input_nc = input_nc
         self.output_nc = output_nc
         self.ngf = ngf
-        self.gpu_ids = gpu_ids
         if type(norm_layer) == functools.partial:
             use_bias = norm_layer.func == nn.InstanceNorm2d
         else:
@@ -210,20 +193,12 @@ class MultiResnet2XGenerator(nn.Module):
         self.decoder = nn.Sequential(*model)
 
     def forward(self, style, content):
-        if self.gpu_ids and isinstance(style.data, torch.cuda.FloatTensor):
-            es = nn.parallel.data_parallel(self.encoder, style, self.gpu_ids)
-            ec = nn.parallel.data_parallel(self.encoder, content, self.gpu_ids)
-            # self.MVC.setTarget(self.gram(es))
-            # e = self.MVC(ec)
-            e = nn.parallel.data_parallel(self.MVC, (ec, self.gram(es)), self.gpu_ids)
-            return nn.parallel.data_parallel(self.decoder, e, self.gpu_ids)
-        else:
-            es = self.encoder(style)
-            ec = self.encoder(content)
-            # self.MVC.setTarget(self.gram(es))
-            # e = self.MVC(ec)
-            e = self.MVC(ec, self.gram(es))
-            return self.model(e)
+        es = self.encoder(style)
+        ec = self.encoder(content)
+        # self.MVC.setTarget(self.gram(es))
+        # e = self.MVC(ec)
+        e = self.MVC(ec, self.gram(es))
+        return self.decoder(e)
 
 
 class NLayerDiscriminator(nn.Module):
@@ -235,7 +210,6 @@ class NLayerDiscriminator(nn.Module):
         n_layers = opt.n_layers_D
         norm_layer = get_norm_layer(norm_type=opt.norm)
         use_sigmoid = opt.no_lsgan
-        self.gpu_ids = opt.gpu_ids
 
         if type(norm_layer) == functools.partial:
             use_bias = norm_layer.func == nn.InstanceNorm2d
@@ -288,14 +262,7 @@ class NLayerDiscriminator(nn.Module):
         self.cla = nn.Sequential(*cla)
 
     def forward(self, input):
-        if len(self.gpu_ids) > 1 and isinstance(input.data, torch.cuda.FloatTensor):
-            z = nn.parallel.data_parallel(self.model, input, self.gpu_ids)
-            pz = nn.parallel.data_parallel(self.amp, z, self.gpu_ids)
-            pz = pz.view(pz.size(0), -1)
-            return nn.parallel.data_parallel(self.dis, z, self.gpu_ids), nn.parallel.data_parallel(self.cla, pz,
-                                                                                                   self.gpu_ids)
-        else:
-            z = self.model(input)
-            pz = self.amp(z)
-            pz = pz.view(pz.size(0), -1)
-            return self.dis(z), self.cla(pz)
+        z = self.model(input)
+        pz = self.amp(z)
+        pz = pz.view(pz.size(0), -1)
+        return self.dis(z), self.cla(pz)

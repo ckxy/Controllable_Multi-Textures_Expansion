@@ -2,7 +2,6 @@ import os
 import ntpath
 import time
 from . import util
-from . import html
 from PIL import Image
 from collections import OrderedDict
 import matplotlib.pyplot as plt

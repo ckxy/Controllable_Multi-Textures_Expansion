@@ -18,7 +18,8 @@ parser.add_argument('--mode', type=str, default='n2', help='mode,n2 or 2n')
 parser.add_argument('--max_iters', type=int, default=1000, help='max iters')
 parser.add_argument('--show_iters', type=int, default=50, help='print loss per N iters')
 opt = parser.parse_args()
-
+print(opt.dir)
+print(opt.max_iters)
 dir = os.path.join(opt.dir, 'train')
 # files = sorted(os.listdir(dir))
 # n = 0
@@ -41,9 +42,11 @@ if opt.mode == 'n2':
         if i[0] != i[1]:
             l.append(i)
 elif opt.mode == '2n':
-    for i in range(size-1):
-        l.append((i, i+1))
-    l.append((size-1, 0))
+    for i in range(size - 1):
+        l.append((i, i + 1))
+    l.append((size - 1, 0))
+elif opt.mode == 'kn':
+    pass
 
 print(l)
 
@@ -202,7 +205,7 @@ for i in range(len(paths)):
             n_iter[0] += 1
             # print loss
             if n_iter[0] % opt.show_iters == (opt.show_iters - 1):
-                print('Iteration: %d, loss: %f' % (n_iter[0] + 1, loss.data[0]))
+                print('Iteration: %d, loss: %f' % (n_iter[0] + 1, loss.item()))
                 # print([loss_layers[li] + ': ' + str(l.data[0]) for li, l in enumerate(layer_losses)]) #loss of each layer
             return loss
 
@@ -211,9 +214,10 @@ for i in range(len(paths)):
     # display result
     out_img = postp(opt_img.data[0].cpu().squeeze())
 
-    save_path = os.path.join(opt.dir, 'trans')
-    save_path = os.path.join(save_path, str(l[i][0]))
+    save_path = os.path.join(opt.dir, opt.mode + 'trans')
+    # save_path = os.path.join(save_path, str(l[i][0]))
+    save_path = os.path.join(save_path, str(l[i][1]))
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-
-    out_img.save(os.path.join(save_path, str(l[i][1]) + '.jpg'))
+    # out_img.save(os.path.join(save_path, str(l[i][1]) + '.jpg'))
+    out_img.save(os.path.join(save_path, str(l[i][0]) + '.jpg'))

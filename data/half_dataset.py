@@ -152,7 +152,7 @@ class _2NDataset(BaseDataset):
         for i in range(self.opt.n_pic):
             self.l.append((i, i))
         for i in range(self.opt.n_pic):
-            self.l.append((i, -1))
+            self.l.append((-1, i))
         print(self.l)
 
     def __getitem__(self, index):
@@ -174,9 +174,6 @@ class _2NDataset(BaseDataset):
 
             A_img = B_img.crop((rw, rh, int(rw + w / 2), int(rh + h / 2)))
 
-            # B_label_short = torch.LongTensor(1).zero_()
-            # B_label_short[0] = self.l[index][1]
-
             B_label_short = torch.FloatTensor(self.opt.n_pic).zero_()
             B_label_short[self.l[index][1]] = 1
 
@@ -184,8 +181,8 @@ class _2NDataset(BaseDataset):
 
             A_star = A_img
         else:
-            dir = os.path.join(self.opt.dataroot, 'trans')
-            dir = os.path.join(dir, str(self.l[index][0]))
+            dir = os.path.join(self.opt.dataroot, '2n_trans')
+            dir = os.path.join(dir, str(self.l[index][1]))
             trans_paths = make_dataset(dir)
             trans_paths = sorted(trans_paths)
 
@@ -193,7 +190,7 @@ class _2NDataset(BaseDataset):
             # B_path = trans_paths[bi]
             B_path = trans_paths[0]
             name = os.path.splitext(os.path.basename(B_path))[0]
-            A_path = self.paths[self.l[index][0]]
+            A_path = self.paths[int(name)]
             B_img = Image.open(B_path).convert('RGB')
             A_img = Image.open(A_path).convert('RGB')
 
@@ -214,17 +211,11 @@ class _2NDataset(BaseDataset):
             A_img = A_img.crop((rw, rh, int(rw + w / 2), int(rh + h / 2)))
             A_star = B_img.crop((rw, rh, int(rw + w / 2), int(rh + h / 2)))
 
-            # B_label_short = torch.LongTensor(1).zero_()
-            # B_label_short[0] = int(name)
-            #
-            # A_label_short = torch.LongTensor(1).zero_()
-            # A_label_short[0] = self.l[index][0]
-
             B_label_short = torch.FloatTensor(self.opt.n_pic).zero_()
-            B_label_short[int(name)] = 1
+            B_label_short[self.l[index][1]] = 1
 
             A_label_short = torch.FloatTensor(self.opt.n_pic).zero_()
-            A_label_short[self.l[index][0]] = 1
+            A_label_short[int(name)] = 1
 
         B_img = self.transform(B_img)
         A_img = self.transform(A_img)

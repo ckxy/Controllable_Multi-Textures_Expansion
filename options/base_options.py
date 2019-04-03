@@ -14,7 +14,7 @@ class BaseOptions():
         self.parser.add_argument('--batchSize', type=int, default=1, help='input batch size')
         self.parser.add_argument('--loadSize', type=int, default=10000, help='scale images to this size')
         self.parser.add_argument('--fineSize', type=int, default=256, help='then crop to this size')
-        self.parser.add_argument('--dataset_mode', type=str, default='unaligned', help='chooses how datasets are loaded. [unaligned | aligned | single | half_crop | ... etc]')
+        self.parser.add_argument('--dataset_mode', type=str, default='2n', help='chooses how datasets are loaded. [unaligned | aligned | single | half_crop | ... etc]')
         self.parser.add_argument('--max_dataset_size', type=int, default=float("inf"), help='Maximum number of samples allowed per dataset. If the dataset directory contains more than max_dataset_size, only a subset is loaded.')
         self.parser.add_argument('--resize_or_crop', type=str, default='resize_and_crop', help='scaling and cropping of images at load time [resize_and_crop|crop|scale_width|scale_width_and_crop]')
         self.parser.add_argument('--no_flip', action='store_true', help='if specified, do not flip the images for data augmentation')
@@ -22,11 +22,12 @@ class BaseOptions():
         self.parser.add_argument('--serial_batches', action='store_true', help='if true, takes images in order to make batches, otherwise takes them randomly')
 
         # model
-        self.parser.add_argument('--model', type=str, default='out_painting', help='chooses which model to use. cycle_gan, pix2pix, test, etc')
+        self.parser.add_argument('--model', type=str, default='multi_half', help='chooses which model to use. cycle_gan, pix2pix, test, etc')
         self.parser.add_argument('--input_nc', type=int, default=3, help='# of input image channels')
         self.parser.add_argument('--output_nc', type=int, default=3, help='# of output image channels')
         self.parser.add_argument('--ngf', type=int, default=64, help='# of gen filters in first conv layer')
-        self.parser.add_argument('--which_model_netG', type=str, default='resnet_9blocks', help='selects model to use for netG')
+        self.parser.add_argument('--nrb', type=int, default=6, help='# of resnet blocks')
+        self.parser.add_argument('--which_model_netG', type=str, default='resnet_2x_6blocks', help='selects model to use for netG')
         self.parser.add_argument('--norm', type=str, default='batch', help='instance normalization or batch normalization')
         self.parser.add_argument('--no_dropout', action='store_true', help='no dropout for the generator')
         self.parser.add_argument('--padding_type', type=str, default='reflect',
@@ -70,10 +71,15 @@ class BaseOptions():
         print('-------------- End ----------------')
 
         # save to the disk
-        if opt.isTrain == True:
+        if opt.isTrain:
             expr_dir = os.path.join(opt.checkpoints_dir, opt.name)
         else:
-            expr_dir = os.path.join(opt.results_dir, opt.name, '%s_%s' % (opt.phase, opt.which_epoch))
+            if opt.which_epoch != '':
+                expr_dir = os.path.join(opt.results_dir, opt.name, '%s_%s' % (opt.phase, opt.which_epoch))
+            else:
+                path = os.path.splitext(opt.which_content)[0].split('/')[-1] + \
+                       '->' + os.path.splitext(opt.which_style)[0]
+                expr_dir = os.path.join(opt.results_dir, opt.name, '%s_%s' % (opt.phase, path))
         util.mkdirs(expr_dir)
         file_name = os.path.join(expr_dir, 'opt.txt')
         with open(file_name, 'wt') as opt_file:

@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import os
 from collections import OrderedDict
-from torch.autograd import Variable
 import util.util as util
 from .base_model import BaseModel
 from . import networks
@@ -17,15 +16,6 @@ class MultiHalfGanModel(BaseModel):
         BaseModel.initialize(self, opt)
         self.isTrain = opt.isTrain
         self.n_pic = opt.n_pic
-        # define tensors
-        self.input_A = self.Tensor(opt.batchSize, opt.input_nc,
-                                   int(opt.fineSize / 2), int(opt.fineSize / 2))
-        self.input_A_star = self.Tensor(opt.batchSize, opt.input_nc,
-                                   int(opt.fineSize / 2), int(opt.fineSize / 2))
-        self.input_B = self.Tensor(opt.batchSize, opt.output_nc,
-                                   opt.fineSize, opt.fineSize)
-        # self.input_BL = torch.cuda.LongTensor(1).zero_() if self.gpu_ids else torch.LongTensor(1).zero_()
-        self.input_BL = self.Tensor(opt.batchSize, opt.n_pic)
 
         if self.opt.lambda_style != 0:
             self.style_layers = ['r11', 'r21', 'r31', 'r41', 'r51']
@@ -35,8 +25,7 @@ class MultiHalfGanModel(BaseModel):
                 self.loss_fns = [loss_fn.cuda() for loss_fn in self.loss_fns]
             self.vgg = VGG()
             self.vgg.load_state_dict(torch.load(os.getcwd() + '/Models/' + 'vgg_conv.pth'))
-            if torch.cuda.is_available():
-                self.vgg.cuda()
+            self.vgg.to(self.device)
             for param in self.vgg.parameters():
                 param.requires_grad = False
 
@@ -58,7 +47,7 @@ class MultiHalfGanModel(BaseModel):
         if self.isTrain:
             self.old_lr = opt.lr
             # define loss functions
-            self.criterionGAN = networks.GANLoss(use_lsgan=not opt.no_lsgan, tensor=self.Tensor)
+            self.criterionGAN = networks.GANLoss(use_lsgan=not opt.no_lsgan).to(self.device)
             self.criterionL1 = torch.nn.L1Loss()
             self.criterionL2 = torch.nn.MSELoss()
             self.criterionBCE = torch.nn.BCELoss()
@@ -76,38 +65,29 @@ class MultiHalfGanModel(BaseModel):
         print('-----------------------------------------------')
 
     def set_input(self, input):
-        input_A = input['A']
-        input_A_star = input['A_star']
-        input_B = input['B']
-        input_BL = input['B_label']
-
-        self.input_A.resize_(input_A.size()).copy_(input_A)
-        self.input_A_star.resize_(input_A_star.size()).copy_(input_A_star)
-        self.input_B.resize_(input_B.size()).copy_(input_B)
-
-        self.input_BL.resize_(input_BL.size()).copy_(input_BL)
+        self.real_A = input['A'].to(self.device)
+        self.real_A_star = input['A_star'].to(self.device)
+        self.real_B = input['B'].to(self.device)
+        self.input_BL = input['B_label'].to(self.device)
         self.input_BL = torch.squeeze(self.input_BL)
 
     def forward(self):
-        self.real_A = Variable(self.input_A)
-        self.real_A_star = Variable(self.input_A_star)
-        self.real_B = Variable(self.input_B)
-        self.fake_B = self.netG.forward(self.real_A_star, self.real_A)
+        self.fake_B = self.netG(self.real_A_star, self.real_A)
 
     def backward_D(self):
         # Fake
         # stop backprop to the generator by detaching fake_B
         # TODO here we use real image to create fake_AB
         fake_AB = self.fake_B.clone()
-        self.pred_fake, _ = self.netD.forward(fake_AB.detach())
+        self.pred_fake, _ = self.netD(fake_AB.detach())
         self.loss_D_fake = self.criterionGAN(self.pred_fake, False)
 
         # Real
         real_AB = self.real_B.clone()
-        self.pred_real, cT = self.netD.forward(real_AB)
+        self.pred_real, cT = self.netD(real_AB)
         self.loss_D_real = self.criterionGAN(self.pred_real, True)
 
-        self.loss_D_C = self.criterionBCE(cT, Variable(self.input_BL))
+        self.loss_D_C = self.criterionBCE(cT, self.input_BL)
         self.loss_D = (self.loss_D_fake + self.loss_D_real) * 0.5 + self.loss_D_C
 
         self.loss_D.backward()
@@ -120,16 +100,16 @@ class MultiHalfGanModel(BaseModel):
             # print(layer_losses)
             self.style_loss = sum(layer_losses) * self.opt.lambda_style
             self.style_loss.backward(retain_graph=True)
-            self.style_loss_value = self.style_loss.data[0] / self.opt.lambda_style
+            self.style_loss_value = self.style_loss.item() / self.opt.lambda_style
 
         self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B)
 
         # First, G(A) should fake the discriminator
         fake_AB = self.fake_B.clone()
-        pred_fake, cF = self.netD.forward(fake_AB)
+        pred_fake, cF = self.netD(fake_AB)
         self.loss_G_GAN = self.criterionGAN(pred_fake, True)
 
-        self.loss_G_C = self.criterionBCE(cF, Variable(self.input_BL))
+        self.loss_G_C = self.criterionBCE(cF, self.input_BL)
         self.loss_G = self.loss_G_GAN + self.loss_G_C + self.loss_G_L1 * self.opt.lambda_l1
 
         self.loss_G.backward()
@@ -147,20 +127,20 @@ class MultiHalfGanModel(BaseModel):
 
     def get_current_errors(self):
         od = OrderedDict([])
-        od['D_real'] = self.loss_D_real.data[0]
-        od['D_fake'] = self.loss_D_fake.data[0]
-        od['G_GAN'] = self.loss_G_GAN.data[0]
-        od['D_C'] = self.loss_D_C.data[0]
-        od['G_C'] = self.loss_G_C.data[0]
-        od['G_L1'] = self.loss_G_L1.data[0]
+        od['D_real'] = self.loss_D_real.item()
+        od['D_fake'] = self.loss_D_fake.item()
+        od['G_GAN'] = self.loss_G_GAN.item()
+        od['D_C'] = self.loss_D_C.item()
+        od['G_C'] = self.loss_G_C.item()
+        od['G_L1'] = self.loss_G_L1.item()
         if self.opt.lambda_style != 0:
             od['Style'] = self.style_loss_value
         return od
 
     def get_current_visuals(self):
-        real_A = util.tensor2im(self.real_A.data)
-        fake_B = util.tensor2im(self.fake_B.data)
-        real_B = util.tensor2im(self.real_B.data)
+        real_A = util.tensor2im(self.real_A)
+        fake_B = util.tensor2im(self.fake_B)
+        real_B = util.tensor2im(self.real_B)
         return OrderedDict([('real_A', real_A), ('fake_B', fake_B), ('real_B', real_B)])
 
     def save(self, label):

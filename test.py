@@ -1,4 +1,3 @@
-import time
 import os
 from options.test_options import TestOptions
 from data.data_loader import CreateDataLoader
@@ -9,8 +8,8 @@ from util import html
 opt = TestOptions().parse()
 
 model = create_model(opt)
-TestOptions().printandsave(opt)
 t1, t2 = model.get_titles()
+TestOptions().printandsave(opt)
 
 data_loader = CreateDataLoader(opt)
 dataset = data_loader.load_data()
