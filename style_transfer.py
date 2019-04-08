@@ -1,7 +1,5 @@
 import os
-
 import torch
-from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
@@ -16,20 +14,11 @@ parser.add_argument('--dir', required=True, help='path to images')
 # n2:n expansion references + nA2 transfer references.2n:n expansion references + n transfer references
 parser.add_argument('--mode', type=str, default='n2', help='mode,n2 or 2n')
 parser.add_argument('--max_iters', type=int, default=1000, help='max iters')
-parser.add_argument('--show_iters', type=int, default=50, help='print loss per N iters')
+parser.add_argument('--show_iters', type=int, default=200, help='print loss per N iters')
+parser.add_argument('--gpu_id', type=int, default=0, help='e.g. 0, -1 for cpu')
 opt = parser.parse_args()
-print(opt.dir)
-print(opt.max_iters)
-dir = os.path.join(opt.dir, 'train')
-# files = sorted(os.listdir(dir))
-# n = 0
-# for f in files:
-#     oldname = os.path.join(dir, f)
-#     newname = os.path.join(dir, str(n) + os.path.splitext(f)[1])
-#     n += 1
-#     os.rename(oldname, newname)
-#     print(oldname + '-->' + newname)
 
+dir = os.path.join(opt.dir, 'train')
 paths = make_dataset(dir)
 paths = sorted(paths)
 size = len(paths)
@@ -45,10 +34,11 @@ elif opt.mode == '2n':
     for i in range(size - 1):
         l.append((i, i + 1))
     l.append((size - 1, 0))
-elif opt.mode == 'kn':
-    pass
+else:
+    raise ValueError("Mode [%s] not recognized." % opt.mode)
 
 print(l)
+
 
 # vgg definition that conveniently let's you grab the outputs from any layer
 class VGG(nn.Module):
@@ -109,6 +99,7 @@ class VGG(nn.Module):
         out['p5'] = self.pool5(out['r54'])
         return [out[key] for key in out_keys]
 
+
 # gram matrix and loss
 class GramMatrix(nn.Module):
     def forward(self, input):
@@ -122,37 +113,36 @@ class GramMatrix(nn.Module):
 class GramMSELoss(nn.Module):
     def forward(self, input, target):
         out = nn.MSELoss()(GramMatrix()(input), target)
-        return(out)
-
-# pre and post processing for images
-prep = transforms.Compose([transforms.ToTensor(),
-                           transforms.Lambda(lambda x: x[torch.LongTensor([2, 1, 0])]), # turn to BGR
-                           transforms.Normalize(mean=[0.40760392, 0.45795686, 0.48501961], # subtract imagenet mean
-                                                std=[1,1,1]),
-                           transforms.Lambda(lambda x: x.mul_(255)),
-                          ])
-postpa = transforms.Compose([transforms.Lambda(lambda x: x.mul_(1./255)),
-                           transforms.Normalize(mean=[-0.40760392, -0.45795686, -0.48501961], # add imagenet mean
-                                                std=[1,1,1]),
-                           transforms.Lambda(lambda x: x[torch.LongTensor([2, 1, 0])]), # turn to RGB
-                           ])
-postpb = transforms.Compose([transforms.ToPILImage()])
+        return (out)
 
 
-def postp(tensor): # to clip results in the range [0,1]
+def postp(tensor):  # to clip results in the range [0,1]
     t = postpa(tensor)
     t[t>1] = 1
     t[t<0] = 0
     img = postpb(t)
     return img
 
+# pre and post processing for images
+prep = transforms.Compose([transforms.ToTensor(),
+                           transforms.Lambda(lambda x: x[torch.LongTensor([2, 1, 0])]),  # turn to BGR
+                           transforms.Normalize(mean=[0.40760392, 0.45795686, 0.48501961],  # subtract imagenet mean
+                                                std=[1,1,1]),
+                           transforms.Lambda(lambda x: x.mul_(255)),
+                          ])
+postpa = transforms.Compose([transforms.Lambda(lambda x: x.mul_(1./255)),
+                           transforms.Normalize(mean=[-0.40760392, -0.45795686, -0.48501961],  # add imagenet mean
+                                                std=[1,1,1]),
+                           transforms.Lambda(lambda x: x[torch.LongTensor([2, 1, 0])]),  # turn to RGB
+                           ])
+postpb = transforms.Compose([transforms.ToPILImage()])
+
 # get network
 vgg = VGG()
 vgg.load_state_dict(torch.load('./Models/vgg_conv.pth'))
-for param in vgg.parameters():
-    param.requires_grad = False
-if torch.cuda.is_available():
-    vgg.cuda()
+vgg.eval()
+device = torch.device('cuda:' + str(opt.gpu_id) if opt.gpu_id != -1 and torch.cuda.is_available() else 'cpu')
+vgg = vgg.to(device)
 
 # define layers, loss functions, weights and compute optimization targets
 style_layers = ['r11', 'r21', 'r31', 'r41', 'r51']
@@ -167,23 +157,21 @@ style_weights = [1e3 / n ** 2 for n in [64, 128, 256, 512, 512]]
 content_weights = [1e0]
 weights = style_weights + content_weights
 
-for i in range(len(paths)):
+for i in range(len(l)):
     print(str(l[i][0]) + '->' + str(l[i][1]))
     print(paths[l[i][0]] + '->' + paths[l[i][1]])
 
     # load images, ordered as [style_image, content_image]
     img_dirs = [paths[l[i][1]], paths[l[i][0]]]
+
     imgs = [Image.open(img_dirs[j]) for j, name in enumerate(img_dirs)]
     imgs_torch = [prep(img) for img in imgs]
-    if torch.cuda.is_available():
-        imgs_torch = [Variable(img.unsqueeze(0).cuda()) for img in imgs_torch]
-    else:
-        imgs_torch = [Variable(img.unsqueeze(0)) for img in imgs_torch]
+    imgs_torch = [img.unsqueeze(0).to(device) for img in imgs_torch]
     style_image, content_image = imgs_torch
     print(style_image.size(), content_image.size())
 
     # opt_img = Variable(torch.randn(content_image.size()).type_as(content_image.data), requires_grad=True) #random init
-    opt_img = Variable(content_image.data.clone(), requires_grad=True)
+    opt_img = content_image.clone()
 
     # compute optimization targets
     style_targets = [GramMatrix()(A).detach() for A in vgg(style_image, style_layers)]
@@ -191,7 +179,7 @@ for i in range(len(paths)):
     targets = style_targets + content_targets
 
     # run style transfer
-    optimizer = optim.LBFGS([opt_img])
+    optimizer = optim.LBFGS([opt_img.requires_grad_()])
     n_iter = [0]
 
     while n_iter[0] <= opt.max_iters:
@@ -212,12 +200,10 @@ for i in range(len(paths)):
         optimizer.step(closure)
 
     # display result
-    out_img = postp(opt_img.data[0].cpu().squeeze())
+    out_img = postp(opt_img[0].cpu().squeeze())
 
-    save_path = os.path.join(opt.dir, opt.mode + 'trans')
-    # save_path = os.path.join(save_path, str(l[i][0]))
+    save_path = os.path.join(opt.dir, opt.mode + '_trans')
     save_path = os.path.join(save_path, str(l[i][1]))
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-    # out_img.save(os.path.join(save_path, str(l[i][1]) + '.jpg'))
     out_img.save(os.path.join(save_path, str(l[i][0]) + '.jpg'))

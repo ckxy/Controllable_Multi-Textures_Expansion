@@ -53,8 +53,8 @@ class BaseModel():
     def load_network(self, network, network_label, epoch_label):
         save_filename = '%s_net_%s.pth' % (epoch_label, network_label)
         save_path = os.path.join(self.save_dir, save_filename)
-        # if isinstance(network, torch.nn.DataParallel):
-        #     network = network.module
+        if isinstance(network, torch.nn.DataParallel):
+            network = network.module
         para = torch.load(save_path, map_location=str(self.device))
         # for k, v in para.items():
         #     print(k, v.size())
