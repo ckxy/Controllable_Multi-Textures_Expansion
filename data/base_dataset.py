@@ -42,7 +42,7 @@ def get_transform(opt):
 
 def __scale_width(img, target_width):
     ow, oh = img.size
-    if (ow == target_width):
+    if ow == target_width:
         return img
     w = target_width
     h = int(target_width * oh / ow)
@@ -51,7 +51,7 @@ def __scale_width(img, target_width):
 
 def __scale_width_then_half(img, target_width):
     ow, oh = img.size
-    if (ow == target_width):
+    if ow == target_width:
         return img
     w = target_width
     h = int(target_width * oh / ow)
